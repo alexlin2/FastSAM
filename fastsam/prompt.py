@@ -16,6 +16,14 @@ except (ImportError, AssertionError, AttributeError):
     check_requirements('git+https://github.com/openai/CLIP.git')  # required before installing lap from source
     import clip
 
+import matplotlib.cm as cm
+
+colormap = cm.get_cmap('cool')
+
+# interpolate color from 0.0 to 1.0
+def get_color(value):
+    value = min(1.0, max(0.0, value))
+    return np.array((colormap(value))[:3]) * 255
 
 class FastSAMPrompt:
 
@@ -452,4 +460,38 @@ class FastSAMPrompt:
         if self.results == None:
             return []
         return self.results[0].masks.data
-        
+    
+    def get_formatted_results(self, sort_args = 'area'):
+        results_sorted = sorted(self._format_results(self.results[0], 0), key=lambda x: x['area'])
+        return results_sorted
+    
+    def visualize_bbox_results(self, results):
+        overlay_image = self.img.copy()
+        for result in results:
+            bbox = result['bbox']
+            x1, y1, x2, y2, _, _ = bbox
+            x1 = int(x1)
+            y1 = int(y1)
+            x2 = int(x2)
+            y2 = int(y2)
+            cv2.rectangle(overlay_image, (x1, y1), (x2, y2), get_color(float(result['score'])), 2)
+            score = str(float(result['score']))
+            score = "{:.2f}".format(float(score))
+            cv2.putText(overlay_image, score, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+
+        return overlay_image
+
+    def visualize_mask_results(self, results):
+        overlay_image = self.img.copy()
+        mean_area = np.mean([result['area'] for result in results])
+        for result in results:
+            mask = result['segmentation']
+            color = (0, 0, 255) if result['area'] > mean_area else (0, 255, 0)
+            # Create a transparent overlay of the mask
+            overlay = np.zeros_like(overlay_image)
+            overlay[mask > 0] = color
+
+            # Add the overlay to the image
+            overlay_image = cv2.addWeighted(overlay_image, 1, overlay, 0.6, 0)
+
+        return overlay_image
