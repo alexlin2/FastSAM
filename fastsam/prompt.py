@@ -25,6 +25,9 @@ def get_color(value):
     value = min(1.0, max(0.0, value))
     return np.array((colormap(value))[:3]) * 255
 
+
+clip_model, preprocess = clip.load('ViT-B/32', device='cuda')
+
 class FastSAMPrompt:
 
     def __init__(self, image, results, device='cuda'):
@@ -33,6 +36,7 @@ class FastSAMPrompt:
         self.device = device
         self.results = results
         self.img = image
+        
     
     def _segment_image(self, image, bbox):
         if isinstance(image, Image.Image):
@@ -83,7 +87,7 @@ class FastSAMPrompt:
 
         return [a for i, a in enumerate(annotations) if i not in to_remove], to_remove
 
-    def _get_bbox_from_mask(self, mask):
+    def _get_bbox_from_mask(self, mask, buffer=0):
         mask = mask.astype(np.uint8)
         contours, hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         x1, y1, w, h = cv2.boundingRect(contours[0])
@@ -98,7 +102,7 @@ class FastSAMPrompt:
                 y2 = max(y2, y_t + h_t)
             h = y2 - y1
             w = x2 - x1
-        return [x1, y1, x2, y2]
+        return [x1 - buffer, y1 - buffer, x2 + buffer, y2 + buffer]
 
     def plot_to_result(self,
              annotations,
@@ -346,18 +350,18 @@ class FastSAMPrompt:
 
     # clip
     @torch.no_grad()
-    def retrieve(self, model, preprocess, elements, search_text: str, device) -> int:
+    def retrieve(self, model, preprocess, elements, search_text: list, device) -> int:
         preprocessed_images = [preprocess(image).to(device) for image in elements]
-        tokenized_text = clip.tokenize([search_text]).to(device)
+        tokenized_text = clip.tokenize(search_text).to(device)
         stacked_images = torch.stack(preprocessed_images)
         image_features = model.encode_image(stacked_images)
         text_features = model.encode_text(tokenized_text)
         image_features /= image_features.norm(dim=-1, keepdim=True)
         text_features /= text_features.norm(dim=-1, keepdim=True)
         probs = 100.0 * image_features @ text_features.T
-        return probs[:, 0].softmax(dim=0)
+        return probs.softmax(dim=0)
 
-    def _crop_image(self, format_results):
+    def _crop_image(self, format_results, buffer=20):
 
         image = Image.fromarray(cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB))
         ori_w, ori_h = image.size
@@ -367,20 +371,13 @@ class FastSAMPrompt:
             image = image.resize((mask_w, mask_h))
         cropped_boxes = []
         cropped_images = []
-        not_crop = []
-        filter_id = []
-        # annotations, _ = filter_masks(annotations)
-        # filter_id = list(_)
         for _, mask in enumerate(annotations):
-            if np.sum(mask['segmentation']) <= 100:
-                filter_id.append(_)
-                continue
-            bbox = self._get_bbox_from_mask(mask['segmentation'])  # mask 的 bbox
-            cropped_boxes.append(self._segment_image(image, bbox))  
+            bbox = self._get_bbox_from_mask(mask['segmentation'], buffer)  # mask 的 bbox
+            cropped_images.append(self._segment_image(image, bbox))
             # cropped_boxes.append(segment_image(image,mask["segmentation"]))
-            cropped_images.append(bbox)  # Save the bounding box of the cropped image.
+            cropped_boxes.append(bbox)  # Save the bounding box of the cropped image.
 
-        return cropped_boxes, cropped_images, not_crop, filter_id, annotations
+        return cropped_boxes, cropped_images
 
     def box_prompt(self, bbox=None, bboxes=None):
         if self.results == None:
@@ -444,28 +441,30 @@ class FastSAMPrompt:
         onemask = onemask >= 1
         return np.array([onemask])
 
-    def text_prompt(self, text):
+    def text_prompt(self, text, confidence=0.6):
         if self.results == None:
             return []
         format_results = self._format_results(self.results[0], 0)
-        cropped_boxes, cropped_images, not_crop, filter_id, annotations = self._crop_image(format_results)
-        clip_model, preprocess = clip.load('ViT-B/32', device=self.device)
-        scores = self.retrieve(clip_model, preprocess, cropped_boxes, text, device=self.device)
-        max_idx = scores.argsort()
-        max_idx = max_idx[-1]
-        max_idx += sum(np.array(filter_id) <= int(max_idx))
-        return np.array([annotations[max_idx]['segmentation']])
+        cropped_boxes, cropped_images = self._crop_image(format_results)
+        scores = self.retrieve(clip_model, preprocess, cropped_images, text, device=self.device)
+        results = []
+        for i, score in enumerate(scores):
+            if torch.any(score > confidence):
+                format_results[i]['score'] = float(torch.max(score))
+                format_results[i]['class'] = text[torch.argmax(score)]
+                results.append(format_results[i])
+        return results, scores
 
     def everything_prompt(self):
         if self.results == None:
             return []
         return self.results[0].masks.data
     
-    def get_formatted_results(self, sort_args = 'area'):
-        results_sorted = sorted(self._format_results(self.results[0], 0), key=lambda x: x['area'])
+    def get_formatted_results(self, sort_arg='area'):
+        results_sorted = sorted(self._format_results(self.results[0], 0), key=lambda x: x[sort_arg])
         return results_sorted
     
-    def visualize_bbox_results(self, results):
+    def visualize_bbox_results(self, results, filter_width=400):
         overlay_image = self.img.copy()
         for result in results:
             bbox = result['bbox']
@@ -474,10 +473,14 @@ class FastSAMPrompt:
             y1 = int(y1)
             x2 = int(x2)
             y2 = int(y2)
+            if x2 - x1 > filter_width:
+                continue
             cv2.rectangle(overlay_image, (x1, y1), (x2, y2), get_color(float(result['score'])), 2)
             score = str(float(result['score']))
             score = "{:.2f}".format(float(score))
-            cv2.putText(overlay_image, score, (x1, y1), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+            if 'class' in result.keys():
+                score = result['class'] + ' ' + score
+            cv2.putText(overlay_image, score, (x1, y2 + 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
 
         return overlay_image
 
