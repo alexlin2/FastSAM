@@ -479,8 +479,8 @@ class FastSAMPrompt:
             score = str(float(result['score']))
             score = "{:.2f}".format(float(score))
             if 'class' in result.keys():
-                score = result['class'] + ' ' + score
-            cv2.putText(overlay_image, score, (x1, y2 + 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+                score = result['class'].split()[-1] + ' ' + score
+            cv2.putText(overlay_image, score, (x1, y2 + 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
 
         return overlay_image
 
