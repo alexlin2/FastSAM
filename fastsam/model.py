@@ -9,6 +9,7 @@ Usage - Predict:
     results = model.predict('ultralytics/assets/bus.jpg')
 """
 
+from pathlib import Path
 from ultralytics.yolo.cfg import get_cfg
 from ultralytics.yolo.engine.exporter import Exporter
 from ultralytics.yolo.engine.model import YOLO
@@ -21,8 +22,19 @@ from .predict import FastSAMPredictor
 
 class FastSAM(YOLO):
 
+    def __init__(self, model='yolov8n.pt', task=None, **kwargs) -> None:
+        super().__init__(model, task)
+        overrides = self.overrides.copy()
+        overrides['conf'] = 0.25
+        overrides.update(kwargs)  # prefer kwargs
+        overrides['mode'] = kwargs.get('mode', 'predict')
+        assert overrides['mode'] in ['track', 'predict']
+        overrides['save'] = kwargs.get('save', False)  # do not save by default if called in Python
+        self.predictor = FastSAMPredictor(overrides=overrides)
+        self.predictor.setup_model(model=self.model, verbose=False)
+
     @smart_inference_mode()
-    def predict(self, source=None, stream=False, **kwargs):
+    def predict(self, source=None, stream=False):
         """
         Perform prediction using the YOLO model.
 
@@ -36,17 +48,6 @@ class FastSAM(YOLO):
         Returns:
             (List[ultralytics.yolo.engine.results.Results]): The prediction results.
         """
-        if source is None:
-            source = ROOT / 'assets' if is_git_dir() else 'https://ultralytics.com/images/bus.jpg'
-            LOGGER.warning(f"WARNING ⚠️ 'source' is missing. Using 'source={source}'.")
-        overrides = self.overrides.copy()
-        overrides['conf'] = 0.25
-        overrides.update(kwargs)  # prefer kwargs
-        overrides['mode'] = kwargs.get('mode', 'predict')
-        assert overrides['mode'] in ['track', 'predict']
-        overrides['save'] = kwargs.get('save', False)  # do not save by default if called in Python
-        self.predictor = FastSAMPredictor(overrides=overrides)
-        self.predictor.setup_model(model=self.model, verbose=False)
         try:
             return self.predictor(source, stream=stream)
         except Exception as e:

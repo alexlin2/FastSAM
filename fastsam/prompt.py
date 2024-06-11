@@ -359,7 +359,7 @@ class FastSAMPrompt:
         image_features /= image_features.norm(dim=-1, keepdim=True)
         text_features /= text_features.norm(dim=-1, keepdim=True)
         probs = 100.0 * image_features @ text_features.T
-        return probs.softmax(dim=0)
+        return probs.softmax(dim=-1)
 
     def _crop_image(self, format_results, buffer=20):
 
@@ -459,11 +459,12 @@ class FastSAMPrompt:
         if self.results == None:
             return []
         return self.results[0].masks.data
-    
-    def get_formatted_results(self, sort_arg='area'):
-        results_sorted = sorted(self._format_results(self.results[0], 0), key=lambda x: x[sort_arg])
-        return results_sorted
-    
+
+    def get_formatted_results(self):
+        if self.results == None:
+            return []
+        return self._format_results(self.results[0], 0)
+
     def visualize_bbox_results(self, results, filter_width=400):
         overlay_image = self.img.copy()
         for result in results:
