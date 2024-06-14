@@ -66,8 +66,8 @@ class FastSAMPrompt:
                 continue
             annotation['id'] = i
             annotation['segmentation'] = mask.cpu().numpy()
-            annotation['bbox'] = result.boxes.data[i]
-            annotation['score'] = result.boxes.conf[i]
+            annotation['bbox'] = result.boxes.data[i].cpu().numpy()
+            annotation['score'] = float(result.boxes.conf[i])
             annotation['area'] = annotation['segmentation'].sum()
             annotations.append(annotation)
         return annotations
