@@ -460,10 +460,15 @@ class FastSAMPrompt:
             return []
         return self.results[0].masks.data
 
-    def get_formatted_results(self):
+    def get_formatted_results(self, sort_arg='area'):
+        if sort_arg == 'area':
+            reverse = True
+        else:
+            reverse = False
         if self.results == None:
             return []
-        return self._format_results(self.results[0], 0)
+        results_sorted = sorted(self._format_results(self.results[0], 0), key=lambda x: x[sort_arg], reverse=reverse)
+        return results_sorted
 
     def visualize_bbox_results(self, results, filter_width=400):
         overlay_image = self.img.copy()
